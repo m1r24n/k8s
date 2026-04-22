@@ -1,0 +1,76 @@
+---
+- name: updating node with ubuntu OS
+  hosts: all
+  become: yes
+  vars:
+    user: ubuntu
+  tasks:
+  - name: update and upgrade repository
+    ansible.builtin.apt:
+      update_cache: true
+      upgrade: yes
+      state: latest
+  - name: Add entries into /etc/sysctl.conf
+    tags:
+    - sysctl
+    ansible.builtin.blockinfile:
+      path: /etc/sysctl.conf
+      marker: "; {mark} ANSIBLE MANAGED BLOCK"
+      block: |
+        net.ipv4.ip_forward = 1
+        net.ipv6.conf.all.forwarding = 1
+  - name: Add entries into /etc/hosts
+    tags:
+    - hosts_file
+    ansible.builtin.blockinfile:
+      path: /etc/hosts
+      marker: "# {mark} ANSIBLE MANAGED BLOCK"
+      block: |
+        192.168.250.10 node0
+        192.168.250.11 node1
+        192.168.250.12 node2
+  - name: add entry into /etc/modules-load.d/modules.conf
+    ansible.builtin.blockinfile:
+      marker: "# {mark} ANSIBLE MANAGED BLOCK"
+      path: /etc/modules-load.d/modules.conf
+      block: |
+        rbd
+        br_netfilter
+  - name: Create file /home/ubuntu/install_containerd.sh
+    ansible.builtin.copy:
+      dest: /home/ubuntu/install_containerd.sh
+      mode: '0755'
+      content: |
+        #!/usr/bin/env bash
+        export CTR="containerd-2.2.1-linux-amd64.tar.gz"
+        export CNI_PLUGINS="cni-plugins-linux-amd64-v1.9.0.tgz"
+        sudo tar Cxzvf /usr/local ${CTR}
+        sudo mkdir -p /usr/local/lib/systemd/system/
+        sudo cp ./containerd.service /usr/local/lib/systemd/system/
+        sudo systemctl daemon-reload
+        sudo systemctl enable --now containerd
+        sudo install -m 755 runc.amd64 /usr/local/sbin/runc
+        sudo mkdir -p /opt/cni/bin
+        sudo tar Cxzvf /opt/cni/bin ${CNI_PLUGINS}
+        sudo mkdir -p /etc/containerd
+        containerd config default | sudo tee /etc/containerd/config.toml
+        sudo sed -i -e "s/SystemdCgroup = false/SystemdCgroup = true/" /etc/containerd/config.toml
+        sudo systemctl restart containerd
+  - name: Create file /home/ubuntu/install_kubeadm.sh
+    ansible.builtin.copy:
+      dest: /home/ubuntu/install_kubeadm.sh
+      mode: '0755'
+      content: |
+        sudo apt-get update
+        sudo apt-get install -y apt-transport-https ca-certificates curl gpg
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.35/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.35/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
+        sudo apt -y update
+        sudo apt install -y kubelet kubeadm kubectl
+        sudo apt-mark hold kubelet kubeadm kubectl
+        sudo systemctl enable --now kubelet
+  - name: Unconditionally reboot the machine with all defaults
+    tags:
+      - reboot
+    ansible.builtin.reboot:
+      msg: "Rebooting machine in 5 seconds"
